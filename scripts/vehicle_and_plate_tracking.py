@@ -32,13 +32,13 @@ def vehicle_and_plate_tracking(
     license_plate_detector = YOLO(license_plate_model_path)
 
     # Load video
-    cap = cv2.VideoCapture(video_path)
+    video_frames = cv2.VideoCapture(video_path)
 
     frame_nmr = -1
     ret = True
     while ret:
         frame_nmr += 1
-        ret, frame = cap.read()
+        ret, frame = video_frames.read()
         if ret:
             results[frame_nmr] = {}
 
@@ -98,7 +98,7 @@ def vehicle_and_plate_tracking(
                             }
                         }
 
-    cap.release()
+    video_frames.release()
     # Write results
     write_csv(results, output_csv_path)
 
