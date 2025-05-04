@@ -1,282 +1,244 @@
-# Global variables for speed calculation
-Y1_PERCENT = 0.3  # First reference line position (30% from top)
-Y2_PERCENT = 0.7    # Second reference line position (70% from top)
-LINE_OFFSET_PERCENT = 0.02  # Percentage tolerance for line crossing detection
-FPS = 25            # Frames per second of the video
-DISTANCE_METERS = 80 # Actual distance between Y1 and Y2 lines in meters
-PRECISION = 2        # Number of segments between Y1 and Y2 (1 = original version)
+import cv2
+from collections import defaultdict
+
+# Constants
+Y1_PERCENT = 0.3
+Y2_PERCENT = 0.7
+LINE_OFFSET_PERCENT = 0.01
+FPS = 25
+DISTANCES = [40, 20, 10, 10]  # Distances between consecutive lines in meters
+PRECISION = len(DISTANCES)  # Number of intermediate lines (one less than number of segments)
+
+def calculate_segment_speed(frame_diff, segment_distance):
+    time_seconds = frame_diff / FPS
+    return round((segment_distance / time_seconds) * 3.6, 2)
+
+def store_speed_to_results(results, car_id, start_frame, end_frame, speed, direction):
+    for f in range(start_frame, end_frame + 1):
+        if f not in results:
+            continue
+        if car_id not in results[f]:
+            continue
+        results[f][car_id]['speed'] = speed
+        results[f][car_id]['direction'] = direction
+        if 'segment_speeds' not in results[f][car_id]:
+            results[f][car_id]['segment_speeds'] = []
+        results[f][car_id]['segment_speeds'].append(speed)
 
 def calculate_speed(results, frame_height):
-    """
-    Calculate vehicle speeds with multiple reference lines for more precise tracking.
-    Uses the global PRECISION variable to determine how many segments to create.
-    
-    Args:
-        results: Detection results
-        frame_height: Height of the video frame
-    
-    Returns:
-        Modified results with speed information
-    """
-    global PRECISION  # Use the global precision value
-    
     # Calculate line positions
-    y_start = int(frame_height * Y1_PERCENT)
-    y_end = int(frame_height * Y2_PERCENT)
-    
-    # Create equally spaced lines based on precision
-    line_positions = [y_start + int((y_end - y_start) * i/PRECISION) for i in range(PRECISION + 1)]
+    y_lines = []
+    for i in range(PRECISION + 1):
+        percent = Y1_PERCENT + (Y2_PERCENT - Y1_PERCENT) * i / PRECISION
+        y_lines.append(int(frame_height * percent))
     line_offset = int(frame_height * LINE_OFFSET_PERCENT)
-    
-    # For each car, we'll track which segments it has crossed
-    tracking = {}  # Format: {car_id: {'segment_states': [state_for_each_segment], 'crossing_info': []}}
-    previous_centers = {}
 
-    # Visualization setup
-    import cv2
+    # Data structures
+    crossings = defaultdict(lambda: [None] * (PRECISION + 1))
+    centers = {}
+
+    # Setup video
     cap = cv2.VideoCapture('./sample.mp4')
     if not cap.isOpened():
         print("Error: Could not open video file")
         return results
-    
+
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    
+
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter('back.mp4', fourcc, fps, (frame_width, frame_height))
-    
-    cv2.namedWindow('Vehicle Speed Tracking', cv2.WINDOW_NORMAL)
-    
+
     frame_nmr = -1
     while True:
         frame_nmr += 1
         ret, frame = cap.read()
         if not ret:
             break
-        
-        # Draw reference lines and their offset zones
-        for line_y in line_positions:
+
+        # Draw lines
+        for line_y in y_lines:
             cv2.line(frame, (0, line_y), (frame.shape[1], line_y), (0, 255, 0), 2)
-            cv2.line(frame, (0, line_y - line_offset), (frame.shape[1], line_y - line_offset), (0, 200, 200), 1)
-            cv2.line(frame, (0, line_y + line_offset), (frame.shape[1], line_y + line_offset), (0, 200, 200), 1)
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, line_y - line_offset), (frame.shape[1], line_y + line_offset), (0, 200, 200), -1)
             cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
-        
+
+        # Process vehicle positions
         if frame_nmr in results:
             for car_id, car_data in results[frame_nmr].items():
-                x1, y1, x2, y2 = car_data['car']['bbox']
                 cy = car_data['car']['center'][1]
-                
-                # Save previous center
-                prev_cy = previous_centers.get(car_id, cy)
-                previous_centers[car_id] = cy
+                centers[car_id] = cy
 
-                # Initialize tracking for this car if not exists
-                if car_id not in tracking:
-                    tracking[car_id] = {
-                        'segment_states': [None] * PRECISION,  # Tracks state for each segment
-                        'crossing_info': [],  # Stores tuples of (start_frame, start_line_idx)
-                        'speeds': []  # Stores calculated speeds for each segment
-                    }
-                
-                # Check each segment for crossing
-                for segment_idx in range(PRECISION):
-                    upper_line = line_positions[segment_idx]
-                    lower_line = line_positions[segment_idx + 1]
-                    
-                    # Check if we're entering the upper line's zone
-                    if tracking[car_id]['segment_states'][segment_idx] is None:
-                        was_outside = prev_cy < (upper_line - line_offset) or prev_cy > (upper_line + line_offset)
-                        is_inside = (upper_line - line_offset) <= cy <= (upper_line + line_offset)
-                        if was_outside and is_inside:
-                            # Starting to cross this segment
-                            tracking[car_id]['segment_states'][segment_idx] = 'crossing'
-                            tracking[car_id]['crossing_info'].append((frame_nmr, segment_idx))
-                    
-                    # Check if we're entering the lower line's zone while crossing
-                    elif tracking[car_id]['segment_states'][segment_idx] == 'crossing':
-                        was_outside = prev_cy < (lower_line - line_offset) or prev_cy > (lower_line + line_offset)
-                        is_inside = (lower_line - line_offset) <= cy <= (lower_line + line_offset)
-                        if was_outside and is_inside:
-                            # Finished crossing this segment
-                            start_frame, start_segment_idx = tracking[car_id]['crossing_info'].pop(0)
-                            frame_diff = frame_nmr - start_frame
-                            time_seconds = frame_diff / FPS
-                            segment_distance = DISTANCE_METERS / PRECISION  # Each segment is 1/PRECISION of total distance
-                            speed_kph = round((segment_distance / time_seconds) * 3.6, 2)
-                            
-                            # Store the speed for this segment
-                            tracking[car_id]['speeds'].append(speed_kph)
-                            tracking[car_id]['segment_states'][segment_idx] = 'crossed'
-                            
-                            # Update the results with the latest speed
-                            for fn in range(start_frame, frame_nmr + 1):
-                                if fn in results and car_id in results[fn]:
-                                    if 'speeds' not in results[fn][car_id]:
-                                        results[fn][car_id]['speeds'] = []
-                                    results[fn][car_id]['speeds'].append(speed_kph)
-                                    results[fn][car_id]['latest_speed'] = speed_kph
-                
-                # Visualization
-                color = (0, 255, 0)  # Default green
-                # If currently crossing any segment, show red
-                if 'crossing' in tracking[car_id]['segment_states']:
-                    color = (0, 0, 255)
-                
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                info = f"ID:{car_id}"
-                if 'speeds' in car_data:
-                    avg_speed = sum(car_data['speeds'])/len(car_data['speeds'])
-                    info += f" {avg_speed:.1f}km/h"
-                elif 'latest_speed' in car_data:
-                    info += f" {car_data['latest_speed']}km/h"
-                cv2.putText(frame, info, (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                # Record line crossings
+                for i, line_y in enumerate(y_lines):
+                    if crossings[car_id][i] is not None:
+                        continue
+                    in_zone = (line_y - line_offset) <= cy <= (line_y + line_offset)
+                    if in_zone:
+                        crossings[car_id][i] = frame_nmr
+
+                # Display speed
+                if 'speed' in car_data:
+                    x1, y1, x2, y2 = car_data['car']['bbox']
+                    info = f"ID:{car_id} {car_data['speed']:.1f}km/h {car_data.get('direction', '')}"
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+                    cv2.putText(frame, info, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
         out.write(frame)
         cv2.imshow('Vehicle Speed Tracking', frame)
         if cv2.waitKey(25) & 0xFF == ord('q'):
             break
-    
+
     cap.release()
     out.release()
     cv2.destroyAllWindows()
+
+    # Calculate speed between every valid pair of crossings for each vehicle
+    for car_id, line_frames in crossings.items():
+        for i in range(len(line_frames) - 1):
+            for j in range(i + 1, len(line_frames)):
+                f1 = line_frames[i]
+                f2 = line_frames[j]
+                if f1 is None or f2 is None:
+                    continue
+                
+                # Calculate total distance between the lines
+                if i < j:
+                    segment_distances = DISTANCES[i:j]
+                else:
+                    segment_distances = DISTANCES[j:i]
+                total_distance = sum(segment_distances)
+                
+                if f1 < f2:
+                    frame_diff = f2 - f1
+                    speed = calculate_segment_speed(frame_diff, total_distance)
+                    direction = 'down'
+                    store_speed_to_results(results, car_id, f1, f2, speed, direction)
+                elif f1 > f2:
+                    frame_diff = f1 - f2
+                    speed = calculate_segment_speed(frame_diff, total_distance)
+                    direction = 'up'
+                    store_speed_to_results(results, car_id, f2, f1, speed, direction)
+
     return results
 
-# # Global variables for speed calculation
-# Y1_PERCENT = 0.3  # First reference line position (30% from top)
-# Y2_PERCENT = 0.7    # Second reference line position (70% from top)
-# LINE_OFFSET_PERCENT = 0.02  # Percentage tolerance for line crossing detection
-# FPS = 25            # Frames per second of the video
-# DISTANCE_METERS = 80 # Actual distance between Y1 and Y2 lines in meters
 
 
+# # Constants
+# Y1_PERCENT = 0.3
+# Y2_PERCENT = 0.7
+# LINE_OFFSET_PERCENT = 0.01
+# FPS = 25
+# DISTANCE_METERS = 80
+# PRECISION = 3
+
+# def calculate_segment_speed(frame_diff):
+#     time_seconds = frame_diff / FPS
+#     segment_distance = DISTANCE_METERS / PRECISION
+#     return round((segment_distance / time_seconds) * 3.6, 2)
+
+# def store_speed_to_results(results, car_id, start_frame, end_frame, speed, direction):
+#     for f in range(start_frame, end_frame + 1):
+#         if f not in results:
+#             continue
+#         if car_id not in results[f]:
+#             continue
+#         results[f][car_id]['speed'] = speed
+#         results[f][car_id]['direction'] = direction
+#         if 'segment_speeds' not in results[f][car_id]:
+#             results[f][car_id]['segment_speeds'] = []
+#         results[f][car_id]['segment_speeds'].append(speed)
 
 # def calculate_speed(results, frame_height):
-#     """
-#     Calculate vehicle speeds by checking both possible line crossing orders separately.
-#     Save the visualization as back.mp4.
-#     """
-#     y1_line = int(frame_height * Y1_PERCENT)
-#     y2_line = int(frame_height * Y2_PERCENT)
+#     # Calculate line positions
+#     y_lines = []
+#     for i in range(PRECISION + 1):
+#         percent = Y1_PERCENT + (Y2_PERCENT - Y1_PERCENT) * i / PRECISION
+#         y_lines.append(int(frame_height * percent))
 #     line_offset = int(frame_height * LINE_OFFSET_PERCENT)
-    
-#     # Tracking dictionaries
-#     y1_first = {}
-#     y2_first = {}
-#     previous_centers = {}
 
-#     # Visualization setup
-#     import cv2
+#     # Data structures
+#     crossings = defaultdict(lambda: [None] * (PRECISION + 1))
+#     centers = {}
+
+#     # Setup video
 #     cap = cv2.VideoCapture('./sample.mp4')
 #     if not cap.isOpened():
 #         print("Error: Could not open video file")
 #         return results
-    
+
 #     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 #     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 #     fps = cap.get(cv2.CAP_PROP_FPS)
-    
+
 #     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 #     out = cv2.VideoWriter('back.mp4', fourcc, fps, (frame_width, frame_height))
-    
-#     cv2.namedWindow('Vehicle Speed Tracking', cv2.WINDOW_NORMAL)
-    
+
 #     frame_nmr = -1
 #     while True:
 #         frame_nmr += 1
 #         ret, frame = cap.read()
 #         if not ret:
 #             break
-        
-#         # Draw reference lines
-#         for line_y in [y1_line, y2_line]:
+
+#         # Draw lines
+#         for line_y in y_lines:
 #             cv2.line(frame, (0, line_y), (frame.shape[1], line_y), (0, 255, 0), 2)
-#             cv2.line(frame, (0, line_y - line_offset), (frame.shape[1], line_y - line_offset), (0, 200, 200), 1)
-#             cv2.line(frame, (0, line_y + line_offset), (frame.shape[1], line_y + line_offset), (0, 200, 200), 1)
 #             overlay = frame.copy()
 #             cv2.rectangle(overlay, (0, line_y - line_offset), (frame.shape[1], line_y + line_offset), (0, 200, 200), -1)
 #             cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
-        
+
+#         # Process vehicle positions
 #         if frame_nmr in results:
 #             for car_id, car_data in results[frame_nmr].items():
-#                 x1, y1, x2, y2 = car_data['car']['bbox']
 #                 cy = car_data['car']['center'][1]
-                
-#                 # Save previous center
-#                 prev_cy = previous_centers.get(car_id, cy)
-#                 previous_centers[car_id] = cy
+#                 centers[car_id] = cy
 
-#                 # Initialize tracking
-#                 if car_id not in y1_first:
-#                     y1_first[car_id] = {'y1_frame': None, 'y2_frame': None}
-#                 if car_id not in y2_first:
-#                     y2_first[car_id] = {'y2_frame': None, 'y1_frame': None}
+#                 # Record line crossings
+#                 for i, line_y in enumerate(y_lines):
+#                     if crossings[car_id][i] is not None:
+#                         continue
+#                     in_zone = (line_y - line_offset) <= cy <= (line_y + line_offset)
+#                     if in_zone:
+#                         crossings[car_id][i] = frame_nmr
 
-#                 # Y1 → Y2 logic (trigger when entering Y1 offset)
-#                 if y1_first[car_id]['y1_frame'] is None:
-#                     was_outside = prev_cy < (y1_line - line_offset) or prev_cy > (y1_line + line_offset)
-#                     is_inside = (y1_line - line_offset) <= cy <= (y1_line + line_offset)
-#                     if was_outside and is_inside:
-#                         y1_first[car_id]['y1_frame'] = frame_nmr
-
-#                 if (y1_first[car_id]['y1_frame'] is not None and 
-#                     y1_first[car_id]['y2_frame'] is None):
-#                     was_outside = prev_cy < (y2_line - line_offset) or prev_cy > (y2_line + line_offset)
-#                     is_inside = (y2_line - line_offset) <= cy <= (y2_line + line_offset)
-#                     if was_outside and is_inside:
-#                         y1_first[car_id]['y2_frame'] = frame_nmr
-#                         frame_diff = y1_first[car_id]['y2_frame'] - y1_first[car_id]['y1_frame']
-#                         time_seconds = frame_diff / FPS
-#                         speed_kph = round((DISTANCE_METERS / time_seconds) * 3.6, 2)
-#                         for fn in range(y1_first[car_id]['y1_frame'], y1_first[car_id]['y2_frame'] + 1):
-#                             if fn in results and car_id in results[fn]:
-#                                 results[fn][car_id]['speed'] = speed_kph
-#                         y1_first[car_id] = {'y1_frame': None, 'y2_frame': None}
-
-#                 # Y2 → Y1 logic (trigger when entering Y2 offset)
-#                 if y2_first[car_id]['y2_frame'] is None:
-#                     was_outside = prev_cy < (y2_line - line_offset) or prev_cy > (y2_line + line_offset)
-#                     is_inside = (y2_line - line_offset) <= cy <= (y2_line + line_offset)
-#                     if was_outside and is_inside:
-#                         y2_first[car_id]['y2_frame'] = frame_nmr
-
-#                 if (y2_first[car_id]['y2_frame'] is not None and 
-#                     y2_first[car_id]['y1_frame'] is None):
-#                     was_outside = prev_cy < (y1_line - line_offset) or prev_cy > (y1_line + line_offset)
-#                     is_inside = (y1_line - line_offset) <= cy <= (y1_line + line_offset)
-#                     if was_outside and is_inside:
-#                         y2_first[car_id]['y1_frame'] = frame_nmr
-#                         frame_diff = y2_first[car_id]['y1_frame'] - y2_first[car_id]['y2_frame']
-#                         time_seconds = frame_diff / FPS
-#                         speed_kph = round((DISTANCE_METERS / time_seconds) * 3.6, 2)
-#                         for fn in range(y2_first[car_id]['y2_frame'], y2_first[car_id]['y1_frame'] + 1):
-#                             if fn in results and car_id in results[fn]:
-#                                 results[fn][car_id]['speed'] = speed_kph
-#                         y2_first[car_id] = {'y2_frame': None, 'y1_frame': None}
-
-#                 # Optional: reset tracking if far outside zone (not strictly required anymore)
-#                 if (y2_first[car_id]['y2_frame'] is not None and 
-#                     (cy < (y1_line - line_offset) or cy > (y2_line + line_offset))):
-#                     y2_first[car_id] = {'y2_frame': None, 'y1_frame': None}
-
-#                 # Visualization
-#                 color = (0, 255, 0)
-#                 if y2_first[car_id]['y2_frame'] is not None and y2_first[car_id]['y1_frame'] is None:
-#                     color = (0, 0, 255)
-#                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-#                 info = f"ID:{car_id}"
+#                 # Display speed
 #                 if 'speed' in car_data:
-#                     info += f" {car_data['speed']}km/h"
-#                 cv2.putText(frame, info, (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+#                     x1, y1, x2, y2 = car_data['car']['bbox']
+#                     info = f"ID:{car_id} {car_data['speed']:.1f}km/h {car_data.get('direction', '')}"
+#                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+#                     cv2.putText(frame, info, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
 #         out.write(frame)
 #         cv2.imshow('Vehicle Speed Tracking', frame)
 #         if cv2.waitKey(25) & 0xFF == ord('q'):
 #             break
-    
+
 #     cap.release()
 #     out.release()
 #     cv2.destroyAllWindows()
+
+#     # Calculate speed between every valid pair of crossings for each vehicle
+#     for car_id, line_frames in crossings.items():
+#         for i in range(len(line_frames)):
+#             for j in range(len(line_frames)):
+#                 if i == j:
+#                     continue
+#                 f1 = line_frames[i]
+#                 f2 = line_frames[j]
+#                 if f1 is None or f2 is None:
+#                     continue
+#                 if f1 < f2:
+#                     frame_diff = f2 - f1
+#                     speed = calculate_segment_speed(frame_diff)
+#                     direction = 'down'
+#                     store_speed_to_results(results, car_id, f1, f2, speed, direction)
+#                 elif f1 > f2:
+#                     frame_diff = f1 - f2
+#                     speed = calculate_segment_speed(frame_diff)
+#                     direction = 'up'
+#                     store_speed_to_results(results, car_id, f2, f1, speed, direction)
+
 #     return results
+

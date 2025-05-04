@@ -1,7 +1,7 @@
 from scripts import (
     vehicle_and_plate_tracking,
     interpolate_vehicle_tracking_csv,
-    overlay_license_plate_on_video
+    process_video
 )
 
 
@@ -25,7 +25,7 @@ def main():
     )
 
     # Step 3: Overlay license plates on the video and save the final video
-    overlay_license_plate_on_video(
+    process_video(
         video_path=input_video_path,
         results_csv_path=interpolated_output_csv,
         output_video_path=output_video_path

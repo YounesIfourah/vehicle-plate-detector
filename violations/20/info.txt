@@ -1,0 +1,2 @@
+Car ID: 20
+Speed: 218.18 km/h
