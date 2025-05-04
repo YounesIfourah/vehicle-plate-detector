@@ -72,13 +72,15 @@ def draw_vehicle_info(frame: np.ndarray,
 def draw_vehicle_border(frame: np.ndarray, top_left: Tuple[int, int], bottom_right: Tuple[int, int], 
                         color: Tuple[int, int, int]) -> np.ndarray:
     """Draw vehicle border with dynamic thickness based on box width."""
-    x1, y1 = top_left
-    x2, y2 = bottom_right
-    
-    box_width = x2 - x1
-    thickness = max(4, min(8, int(box_width / 50)))  # thickness between 2 and 8 px
+    if color != BORDER_UNKNOWN_SPEED: 
+        x1, y1 = top_left
+        x2, y2 = bottom_right
+        
+        box_width = x2 - x1
+        thickness = max(4, min(8, int(box_width / 50)))  # thickness between 2 and 8 px
 
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+        
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
     return frame
 
 def draw_speed_info(frame: np.ndarray, 

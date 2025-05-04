@@ -1,2 +1,0 @@
-Car ID: 57
-Speed: 218.18 km/h
