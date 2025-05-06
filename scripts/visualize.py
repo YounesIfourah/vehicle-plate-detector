@@ -6,7 +6,7 @@ import os
 from typing import Optional, Tuple, Dict
 
 # Global configuration
-SPEED_LIMIT = 130
+SPEED_LIMIT = 1
 BORDER_VALID_SPEED = (193, 255, 114)   # Light Green
 BORDER_VIOLATION_SPEED = (0, 0, 255) # Red
 BORDER_UNKNOWN_SPEED = (0, 255, 255) # Yellow

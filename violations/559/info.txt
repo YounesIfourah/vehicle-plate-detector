@@ -1,2 +1,0 @@
-Car ID: 559
-Speed: 180.0 km/h

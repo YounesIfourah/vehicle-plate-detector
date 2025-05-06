@@ -1,2 +1,0 @@
-Car ID: 42
-Speed: 140.62 km/h

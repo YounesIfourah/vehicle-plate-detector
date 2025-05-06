@@ -1,2 +1,2 @@
 Car ID: 6
-Speed: 140.62 km/h
+Speed: 7.09 km/h

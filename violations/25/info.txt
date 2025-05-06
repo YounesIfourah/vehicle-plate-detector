@@ -1,0 +1,2 @@
+Car ID: 25
+Speed: 8.26 km/h

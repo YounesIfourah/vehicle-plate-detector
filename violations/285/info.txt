@@ -1,2 +1,0 @@
-Car ID: 285
-Speed: 150.0 km/h
