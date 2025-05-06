@@ -23,15 +23,43 @@ def create_violation_folder(violation_id: int) -> str:
     os.makedirs(violation_dir, exist_ok=True)
     return violation_dir
 
+
 def save_violation_evidence(violation_dir: str, car_crop: np.ndarray, license_crop: np.ndarray, 
-                           car_id: int, speed: float) -> None:
-    """Save evidence images for a speed violation."""
+                           car_id: int, speed: float, license_text: str = None) -> None:
+    """Save evidence images for a speed violation and record license plate information.
+    
+    Args:
+        violation_dir: Directory to save evidence
+        car_crop: Cropped image of the car
+        license_crop: Cropped image of the license plate
+        car_id: Unique identifier for the car
+        speed: Detected speed of the car
+        license_text: Recognized license plate text (optional)
+    """
+    # Save images if available
     if car_crop is not None:
         cv2.imwrite(os.path.join(violation_dir, f"car_{car_id}.jpg"), car_crop)
     if license_crop is not None:
         cv2.imwrite(os.path.join(violation_dir, f"license_{car_id}.jpg"), license_crop)
+    
+    # Write information to text file
     with open(os.path.join(violation_dir, "info.txt"), "w") as f:
-        f.write(f"Car ID: {car_id}\nSpeed: {speed} km/h")
+        f.write(f"Car ID: {car_id}\n")
+        f.write(f"Speed: {speed} km/h\n")
+        if license_text:
+            f.write(f"License Plate: {license_text}\n")
+        else:
+            f.write("License Plate: Not available\n")
+
+# def save_violation_evidence(violation_dir: str, car_crop: np.ndarray, license_crop: np.ndarray, 
+#                            car_id: int, speed: float) -> None:
+#     """Save evidence images for a speed violation."""
+#     if car_crop is not None:
+#         cv2.imwrite(os.path.join(violation_dir, f"car_{car_id}.jpg"), car_crop)
+#     if license_crop is not None:
+#         cv2.imwrite(os.path.join(violation_dir, f"license_{car_id}.jpg"), license_crop)
+#     with open(os.path.join(violation_dir, "info.txt"), "w") as f:
+#         f.write(f"Car ID: {car_id}\nSpeed: {speed} km/h")
 
 def draw_vehicle_info(frame: np.ndarray, 
                       top_left: Tuple[int, int], 
@@ -128,23 +156,37 @@ def draw_speed_info(frame: np.ndarray,
 
     return frame
 
-def get_best_license_plate_crop(results: pd.DataFrame, car_id: int, cap: cv2.VideoCapture) -> Optional[np.ndarray]:
-    """Get the best license plate crop for a vehicle based on confidence score."""
+def get_best_license_plate_crop(results: pd.DataFrame, car_id: int, cap: cv2.VideoCapture) -> tuple[Optional[np.ndarray], Optional[str]]:
+    """Get the best license plate crop and text for a vehicle based on confidence score.
+    
+    Args:
+        results: DataFrame containing detection results (from CSV)
+        car_id: ID of the car to get plate for
+        cap: OpenCV VideoCapture object
+        
+    Returns:
+        tuple: (license_plate_crop, license_plate_text) where either can be None if not available
+    """
     car_data = results[results['car_id'] == car_id]
     if len(car_data) == 0:
-        return None
+        return None, None
     
     # Handle cases where all scores are NaN
     if car_data['license_number_score'].isna().all():
-        return None
+        return None, None
         
     try:
         # Get the row with maximum score, ignoring NA values
         max_score_idx = car_data['license_number_score'].idxmax(skipna=True)
         best_row = car_data.loc[max_score_idx]
+        plate_text = best_row['license_number']
+        
+        # Clean plate text if it's 'None' or NaN
+        if plate_text == 'None' or pd.isna(plate_text):
+            plate_text = None
         
         if best_row['license_plate_bbox'] == 'None':
-            return None
+            return None, plate_text
 
         # Save current frame position
         current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -153,32 +195,86 @@ def get_best_license_plate_crop(results: pd.DataFrame, car_id: int, cap: cv2.Vid
         cap.set(cv2.CAP_PROP_POS_FRAMES, best_row['frame_nmr'])
         ret, frame = cap.read()
         if not ret:
-            return None
+            return None, plate_text
 
         # Parse and validate bounding box
         bbox = parse_bbox_string(best_row['license_plate_bbox'])
         if bbox is None:
             # Restore frame position
             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
-            return None
+            return None, plate_text
             
         validated_bbox = validate_bbox(*bbox, frame.shape)
         if validated_bbox is None:
             # Restore frame position
             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
-            return None
+            return None, plate_text
             
         x1, y1, x2, y2 = validated_bbox
         crop = frame[y1:y2, x1:x2]
         
         # Restore frame position
         cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
-        return crop
+        return crop, plate_text
     except Exception as e:
         print(f"Error getting license plate crop for car {car_id}: {str(e)}")
         # Restore frame position in case of error
         cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
-        return None
+        return None, None
+    
+    
+# def get_best_license_plate_crop(results: pd.DataFrame, car_id: int, cap: cv2.VideoCapture) -> Optional[np.ndarray]:
+#     """Get the best license plate crop for a vehicle based on confidence score."""
+#     car_data = results[results['car_id'] == car_id]
+#     if len(car_data) == 0:
+#         return None
+    
+#     # Handle cases where all scores are NaN
+#     if car_data['license_number_score'].isna().all():
+#         return None
+        
+#     try:
+#         # Get the row with maximum score, ignoring NA values
+#         max_score_idx = car_data['license_number_score'].idxmax(skipna=True)
+#         best_row = car_data.loc[max_score_idx]
+#         plate_text= car_data.loc[max_score_idx]['license_number']
+        
+#         if best_row['license_plate_bbox'] == 'None':
+#             return None
+
+#         # Save current frame position
+#         current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        
+#         # Set video to the correct frame
+#         cap.set(cv2.CAP_PROP_POS_FRAMES, best_row['frame_nmr'])
+#         ret, frame = cap.read()
+#         if not ret:
+#             return None
+
+#         # Parse and validate bounding box
+#         bbox = parse_bbox_string(best_row['license_plate_bbox'])
+#         if bbox is None:
+#             # Restore frame position
+#             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+#             return None
+            
+#         validated_bbox = validate_bbox(*bbox, frame.shape)
+#         if validated_bbox is None:
+#             # Restore frame position
+#             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+#             return None
+            
+#         x1, y1, x2, y2 = validated_bbox
+#         crop = frame[y1:y2, x1:x2]
+        
+#         # Restore frame position
+#         cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+#         return crop, plate_text
+#     except Exception as e:
+#         print(f"Error getting license plate crop for car {car_id}: {str(e)}")
+#         # Restore frame position in case of error
+#         cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+#         return None
     
 def get_best_car_crop(results: pd.DataFrame, car_id: int, cap: cv2.VideoCapture) -> Optional[np.ndarray]:
     """Get a car crop for a vehicle (takes first valid crop if no score column exists)."""
@@ -330,7 +426,7 @@ def process_video(video_path: str, results_csv_path: str, output_video_path: str
                             car_max_speeds[car_id] = speed
                             
                             # Get best crops for evidence
-                            license_crop = get_best_license_plate_crop(results, car_id, cap)
+                            license_crop, plate_text = get_best_license_plate_crop(results, car_id, cap)
                             car_crop = get_best_car_crop(results, car_id, cap)
                             
                             # Create or update violation folder
@@ -341,7 +437,7 @@ def process_video(video_path: str, results_csv_path: str, output_video_path: str
                                 violation_dir = car_violation_folders[car_id]
                             
                             # Save evidence
-                            save_violation_evidence(violation_dir, car_crop, license_crop, car_id, speed)
+                            save_violation_evidence(violation_dir, car_crop, license_crop, car_id, speed, plate_text)
                     else:
                         border_color = BORDER_VALID_SPEED
                     
