@@ -112,6 +112,7 @@ site/
 # Outputs
 out.mp4
 sample.mp4
+back.mp4
 test.csv
 test_interpolated.csv
 yolov8n.pt
