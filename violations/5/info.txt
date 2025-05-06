@@ -1,2 +1,0 @@
-Car ID: 5
-Speed: 5.66 km/h

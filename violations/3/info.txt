@@ -1,2 +1,0 @@
-Car ID: 3
-Speed: 3.24 km/h
